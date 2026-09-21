@@ -1,0 +1,84 @@
+
+@import "tailwindcss";
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: #02040a;
+  color: white;
+  font-family: var(--font-sans), "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6, .font-heading {
+  font-family: var(--font-heading), var(--font-sans), sans-serif;
+  letter-spacing: -0.022em;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Custom Motion Stack Keyframes */
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee 68s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.4), 0 0 40px rgba(59, 130, 246, 0.15);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(59, 130, 246, 0.8), 0 0 65px rgba(59, 130, 246, 0.35);
+  }
+}
+
+.glow-pulse-cta {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+@keyframes mouseWheel {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  60% {
+    transform: translateY(6px);
+    opacity: 0.2;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-mouse-wheel {
+  animation: mouseWheel 1.6s ease-in-out infinite;
+}
+
+@keyframes dashGlow {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.animate-dash-glow {
+  stroke-dasharray: 6 6;
+  animation: dashGlow 2.5s linear infinite;
+}

@@ -1,0 +1,5 @@
+import ClientsCMS from "@/components/admin/Clients/ClientsCMS";
+
+export default function ClientsAdminPage() {
+  return <ClientsCMS />;
+}
