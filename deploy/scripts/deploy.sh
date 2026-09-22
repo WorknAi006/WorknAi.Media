@@ -24,13 +24,8 @@ persist_var WEB_IMAGE "${WEB_IMAGE:-}"
 persist_var BACKEND_IMAGE "${BACKEND_IMAGE:-}"
 chmod 600 .env
 
-export LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-$(grep -E "^LETSENCRYPT_EMAIL=" .env | tail -1 | cut -d= -f2- | tr -d "\"'")}"
-
 echo "📥 Pulling images ($(grep -E "^IMAGE_TAG=" .env | cut -d= -f2- || echo latest))..."
-docker compose pull backend web
-
-echo "🔐 Ensuring SSL certificate..."
-bash deploy/scripts/init-ssl.sh
+docker compose pull
 
 echo "🚀 Starting containers..."
 docker compose up -d --remove-orphans
@@ -54,6 +49,17 @@ for i in $(seq 1 30); do
   fi
   sleep 5
 done
+
+port="$(grep -E '^WORKNAI_HTTP_PORT=' .env | cut -d= -f2- || true)"
+port="${port:-8390}"
+echo "🔎 Checking internal router on 127.0.0.1:$port..."
+curl -fsS -H "Host: worknai.media" "http://127.0.0.1:$port/api/health" >/dev/null
+curl -fsS -o /dev/null -H "Host: worknai.media" "http://127.0.0.1:$port/"
+echo "✅ Stack answering on 127.0.0.1:$port"
+if [ ! -f /etc/nginx/sites-enabled/worknai-media.conf ]; then
+  echo "ℹ️  Host nginx not configured yet: run once as root:"
+  echo "    sudo bash $(pwd)/deploy/scripts/setup-host-nginx.sh"
+fi
 
 docker image prune -f >/dev/null
 echo "🎉 Deployed $(grep -E "^IMAGE_TAG=" .env | cut -d= -f2-)"
