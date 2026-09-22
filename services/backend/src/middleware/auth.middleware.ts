@@ -27,8 +27,10 @@ export const generateToken = (user: {
   email: string;
   role: "admin" | "employee" | "client" | string;
 }): string => {
+  // DB values may differ in case/whitespace ("Admin", " admin ")
+  const rawRole = String(user.role ?? "").trim().toLowerCase();
   const role: "admin" | "employee" | "client" =
-    user.role === "admin" ? "admin" : user.role === "employee" ? "employee" : "client";
+    rawRole === "admin" ? "admin" : rawRole === "employee" ? "employee" : "client";
 
   const payload: JwtUserPayload = {
     id: String(user.id),

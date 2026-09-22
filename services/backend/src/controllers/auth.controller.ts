@@ -113,7 +113,7 @@ export const login = async (req: Request, res: Response) => {
             id: data.id,
             name: data.name,
             email: data.email,
-            role: data.role || "employee",
+            role: String(data.role || "employee").trim().toLowerCase(),
         };
 
         const token = generateToken(user);
