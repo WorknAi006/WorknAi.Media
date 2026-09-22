@@ -4,7 +4,7 @@
 set -euo pipefail
 
 APP_DIR="/opt/worknai"
-DEPLOY_USER="${DEPLOY_USER:-deploy}"
+DEPLOY_USER="${DEPLOY_USER:-worknai}"
 
 echo "🚀 Setting up VPS for WorknAI Media (Docker)..."
 

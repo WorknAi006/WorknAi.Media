@@ -25,7 +25,7 @@ persist_var BACKEND_IMAGE "${BACKEND_IMAGE:-}"
 chmod 600 .env
 
 echo "📥 Pulling images ($(grep -E "^IMAGE_TAG=" .env | cut -d= -f2- || echo latest))..."
-docker compose pull
+docker compose pull --quiet
 
 echo "🚀 Starting containers..."
 docker compose up -d --remove-orphans

@@ -23,11 +23,11 @@ www ──► apex ───┘   │   └── worknai.* ──► 127.0.0.1:
 ## One-time setup
 
 1. **DNS** — A records for `worknai.media`, `www.worknai.media`, `admin.worknai.media` → VPS IP.
-2. **VPS base** (root) — copy `deploy/setup-vps.sh` to the server and run `bash setup-vps.sh`. Installs Docker if missing, creates the `deploy` user and `/opt/worknai`. It does not touch PM2, nginx or other apps.
+2. **VPS base** (root) — copy `deploy/setup-vps.sh` to the server and run `bash setup-vps.sh`. Installs Docker if missing, creates the `worknai` user and `/opt/worknai`. It does not touch PM2, nginx or other apps.
 3. **Deploy key** (root, on the VPS):
    ```bash
    ssh-keygen -t ed25519 -f /root/worknai_deploy -N "" -C "worknai-deploy"
-   cat /root/worknai_deploy.pub >> /home/deploy/.ssh/authorized_keys
+   cat /root/worknai_deploy.pub >> /home/worknai/.ssh/authorized_keys
    cat /root/worknai_deploy      # -> GitHub secret VPS_SSH_KEY, then delete both files
    ```
 4. **GitHub secrets** (Settings → Secrets and variables → Actions):
@@ -35,7 +35,7 @@ www ──► apex ───┘   │   └── worknai.* ──► 127.0.0.1:
    | Secret | Value |
    |---|---|
    | `VPS_HOST` | VPS IP |
-   | `VPS_USER` | `deploy` |
+   | `VPS_USER` | `worknai` |
    | `VPS_SSH_KEY` | private key from step 3 |
    | `VPS_PORT` | optional, default `22` |
    | `PROD_ENV_FILE` | optional: full production `.env` (see `.env.example`) |
