@@ -30,9 +30,10 @@ docker compose pull --quiet
 echo "🚀 Starting containers..."
 docker compose up -d --remove-orphans
 
-echo "🔄 Reloading nginx..."
-docker compose exec -T nginx nginx -t
-docker compose exec -T nginx nginx -s reload
+# Config files are bind-mounted: restart so nginx always runs the freshly copied config
+# (a reload via `exec` fails if the container is still in a restart loop)
+echo "🔄 Restarting nginx..."
+docker compose restart nginx
 
 echo "⏳ Waiting for services to become healthy..."
 for i in $(seq 1 30); do
@@ -53,8 +54,20 @@ done
 port="$(grep -E '^WORKNAI_HTTP_PORT=' .env | cut -d= -f2- || true)"
 port="${port:-8390}"
 echo "🔎 Checking internal router on 127.0.0.1:$port..."
-curl -fsS -H "Host: worknai.media" "http://127.0.0.1:$port/api/health" >/dev/null
-curl -fsS -o /dev/null -H "Host: worknai.media" "http://127.0.0.1:$port/"
+ok=0
+for i in $(seq 1 10); do
+  if curl -fsS -H "Host: worknai.media" "http://127.0.0.1:$port/api/health" >/dev/null 2>&1 \
+     && curl -fsS -o /dev/null -H "Host: worknai.media" "http://127.0.0.1:$port/" 2>/dev/null; then
+    ok=1; break
+  fi
+  sleep 3
+done
+if [ "$ok" != "1" ]; then
+  echo "❌ nginx router not answering on 127.0.0.1:$port"
+  docker compose ps nginx
+  docker compose logs --tail=30 nginx
+  exit 1
+fi
 echo "✅ Stack answering on 127.0.0.1:$port"
 if [ ! -f /etc/nginx/sites-enabled/worknai-media.conf ]; then
   echo "ℹ️  Host nginx not configured yet: run once as root:"
