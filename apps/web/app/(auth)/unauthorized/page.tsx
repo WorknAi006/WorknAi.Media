@@ -3,12 +3,11 @@
 import React from "react";
 import Link from "next/link";
 import { ShieldAlert, ArrowLeft, Home, LogOut } from "lucide-react";
+import { clearSession } from "@/app/lib/session";
 
 export default function UnauthorizedPage() {
   const handleLogout = () => {
-    document.cookie = "worknai_role=; path=/; max-age=0";
-    document.cookie = "worknai_user=; path=/; max-age=0";
-    localStorage.removeItem("worknai_user");
+    clearSession();
     window.location.href = "/login";
   };
 

@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Shield, Lock, Mail, ArrowRight, UserCheck, Sparkles } from "lucide-react";
+import { setSessionCookie } from "@/app/lib/session";
 
 export default function LoginPage() {
   return (
@@ -21,7 +22,6 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect");
 
@@ -31,12 +31,11 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(null);
 
   const setAuthCookies = (user: { name: string; email: string; role: string }, token?: string) => {
-    // Set 7-day cookie for Next.js middleware and client
-    const maxAge = 60 * 60 * 24 * 7;
-    document.cookie = `worknai_role=${user.role}; path=/; max-age=${maxAge}; SameSite=Lax`;
-    document.cookie = `worknai_user=${encodeURIComponent(JSON.stringify(user))}; path=/; max-age=${maxAge}; SameSite=Lax`;
+    // 7-day cookies shared by worknai.media and admin.worknai.media
+    setSessionCookie("worknai_role", user.role);
+    setSessionCookie("worknai_user", encodeURIComponent(JSON.stringify(user)));
     if (token) {
-      document.cookie = `worknai_token=${token}; path=/; max-age=${maxAge}; SameSite=Lax`;
+      setSessionCookie("worknai_token", token);
       localStorage.setItem("worknai_token", token);
     }
     localStorage.setItem("worknai_user", JSON.stringify(user));
@@ -67,14 +66,12 @@ function LoginForm() {
 
       setAuthCookies(data.user, data.token);
 
-      // Redirect appropriately
-      if (redirect) {
-        router.push(redirect);
-      } else if (data.user.role === "admin") {
-        router.push("/admin");
-      } else {
-        router.push("/dashboard");
-      }
+      // Full page navigation: /admin lives on the admin subdomain in production.
+      // Only same-site relative redirects are honoured (prevents open redirects).
+      const safeRedirect =
+        redirect && redirect.startsWith("/") && !redirect.startsWith("//") ? redirect : null;
+      window.location.href =
+        safeRedirect || (data.user.role === "admin" ? "/admin" : "/dashboard");
     } catch (err: any) {
       setError("Failed to connect to authentication server");
       setLoading(false);

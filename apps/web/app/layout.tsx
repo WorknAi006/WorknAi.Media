@@ -4,6 +4,7 @@ import "./globals.css";
 import CursorGlow from "@/components/ui/CursorGlow";
 import CustomCursor from "@/components/ui/CustomCursor";
 import WorldMapGlowBackground from "@/components/background/WorldMapGlowBackground";
+import AuthSync from "@/components/auth/AuthSync";
 
 const plusJakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -38,6 +39,8 @@ export default function RootLayout({
       className={`${plusJakarta.variable} ${outfit.variable} ${plusJakarta.className} h-full antialiased scroll-smooth`}
     >
       <body className={`${plusJakarta.className} min-h-full flex flex-col relative bg-[#02040a] text-white overflow-x-hidden font-sans`}>
+        <AuthSync />
+
         {/* Full-Page Fixed Luminous World Map Glow Background */}
         <WorldMapGlowBackground />
 

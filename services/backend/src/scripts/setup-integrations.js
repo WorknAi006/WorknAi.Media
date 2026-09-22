@@ -2,8 +2,11 @@ require('dotenv').config();
 const { Client } = require('pg');
 
 async function setup() {
-  const password = process.env.SUPABASE_DB_PASSWORD || 'Work7654321forMedia';
+  const password = process.env.SUPABASE_DB_PASSWORD || '';
   const url = process.env.DATABASE_URL || ('postgresql://postgres.' + (process.env.SUPABASE_PROJECT_ID || 'azlrpwmernlmovpedhmb') + ':' + encodeURIComponent(password) + '@aws-0-ap-south-1.pooler.supabase.com:6543/postgres');
+  if (!process.env.DATABASE_URL && !password) {
+    throw new Error('Set DATABASE_URL or SUPABASE_DB_PASSWORD in .env');
+  }
   console.log('Connecting to Supabase Postgres...');
   const client = new Client({ connectionString: url });
   await client.connect();
@@ -35,10 +38,13 @@ async function setup() {
   }
 
   // Insert or update the Instagram integration
-  const token = 'IGAAZAZAbXDOfLFBZAGFRUW5RMmlNWHVNZAzdCLXBtZAU5ITFY1eUJ6WUszX0VYOFR4Q1BJYWdnQVlGRGVKWk1SQ2FRVlVYVlVWMkhwZA3Q1S0owWXVCenh4ZADhtY1FCUEpBRUxhdjhiMnlmVkxDcjRnLWdNekRlcFBxNW1vU0dCcXVtWQZDZD';
-  const accountId = '28517787071171649';
-  const accountName = 'worknaiintern1';
-  const appId = '1054238947409813';
+  const token = process.env.INSTAGRAM_ACCESS_TOKEN;
+  const accountId = process.env.INSTAGRAM_ACCOUNT_ID;
+  const accountName = process.env.INSTAGRAM_ACCOUNT_NAME || 'worknaiintern1';
+  const appId = process.env.META_APP_ID || '1054238947409813';
+  if (!token || !accountId) {
+    throw new Error('Set INSTAGRAM_ACCESS_TOKEN and INSTAGRAM_ACCOUNT_ID in .env');
+  }
 
   // Check if exists
   const existing = await client.query(`SELECT id FROM public.social_integrations WHERE platform = 'instagram' AND account_id = $1`, [accountId]);

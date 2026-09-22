@@ -1,6 +1,7 @@
+require('dotenv').config();
 const { Client } = require('pg');
 
-const url = 'postgresql://postgres.azlrpwmernlmovpedhmb:' + encodeURIComponent('Work7654321forMedia') + '@aws-0-ap-south-1.pooler.supabase.com:6543/postgres';
+const url = process.env.DATABASE_URL || ('postgresql://postgres.' + (process.env.SUPABASE_PROJECT_ID || 'azlrpwmernlmovpedhmb') + ':' + encodeURIComponent(process.env.SUPABASE_DB_PASSWORD || '') + '@aws-0-ap-south-1.pooler.supabase.com:6543/postgres');
 const c = new Client({ connectionString: url });
 
 const initialClients = [

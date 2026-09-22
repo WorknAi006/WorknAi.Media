@@ -62,7 +62,7 @@ export default function IntegrationsPage() {
   const [setAsDefault, setSetAsDefault] = useState(true);
 
   const rawUrl = process.env.NEXT_PUBLIC_API_URL || "";
-  const apiBase = rawUrl ? (rawUrl.endsWith("/api") ? rawUrl : `${rawUrl}/api`) : "http://localhost:5001/api";
+  const apiBase = rawUrl ? (rawUrl.endsWith("/api") ? rawUrl : `${rawUrl}/api`) : "/api";
 
   const getHeaders = (hasBody = false): HeadersInit => {
     const token = typeof window !== "undefined" ? (localStorage.getItem("worknai_token") || "") : "";

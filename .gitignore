@@ -10,3 +10,9 @@ coverage
 *.tmp
 *.txt
 .turbo
+
+# Server runtime data (certs etc.)
+/data
+
+# Local tooling
+.serena/

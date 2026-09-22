@@ -1,67 +1,178 @@
-name: Deploy to VPS
+name: CI / CD
 
+# push to main  -> verify -> build & push Docker images -> deploy to VPS
+# pull requests -> verify only
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  APP_DIR: /opt/worknai
+  PUBLIC_URL: https://worknai.media
+  ADMIN_URL: https://admin.worknai.media
 
 jobs:
-  deploy:
-    name: Deploy to VPS (72.61.171.164)
+  verify:
+    name: Verify (${{ matrix.name }})
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: backend
+            dir: services/backend
+            check: npm run typecheck && npm run build
+          - name: web
+            dir: apps/web
+            check: npm run typecheck
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Deploy via SSH to VPS
-        uses: appleboy/ssh-action@v1.0.3
+      - uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.VPS_HOST || '72.61.171.164' }}
-          username: ${{ secrets.VPS_USERNAME || 'root' }}
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck / build
+        run: ${{ matrix.check }}
+
+  build:
+    name: Build & push images
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      web_image: ${{ steps.names.outputs.web }}
+      backend_image: ${{ steps.names.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Image names
+        id: names
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "web=${REGISTRY}/${owner}/worknai-web" >> "$GITHUB_OUTPUT"
+          echo "backend=${REGISTRY}/${owner}/worknai-backend" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backend
+        uses: docker/build-push-action@v6
+        with:
+          context: services/backend
+          push: true
+          tags: |
+            ${{ steps.names.outputs.backend }}:${{ github.sha }}
+            ${{ steps.names.outputs.backend }}:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Build & push web
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=/api
+            NEXT_PUBLIC_COOKIE_DOMAIN=.worknai.media
+          tags: |
+            ${{ steps.names.outputs.web }}:${{ github.sha }}
+            ${{ steps.names.outputs.web }}:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+  deploy:
+    name: Deploy to VPS
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ env.PUBLIC_URL }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare deploy bundle
+        env:
+          PROD_ENV_FILE: ${{ secrets.PROD_ENV_FILE }}
+        run: |
+          mkdir -p bundle
+          cp -r docker-compose.yml deploy bundle/
+          # Optional: manage the server .env from a GitHub secret
+          if [ -n "$PROD_ENV_FILE" ]; then
+            printf '%s\n' "$PROD_ENV_FILE" > bundle/env.prod
+          fi
+
+      - name: Copy files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          script_stop: true
+          source: bundle/*
+          target: ${{ env.APP_DIR }}
+          strip_components: 1
+          overwrite: true
+
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          WEB_IMAGE: ${{ needs.build.outputs.web_image }}
+          BACKEND_IMAGE: ${{ needs.build.outputs.backend_image }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_DIR: ${{ env.APP_DIR }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: IMAGE_TAG,WEB_IMAGE,BACKEND_IMAGE,GHCR_USER,GHCR_TOKEN,APP_DIR
+          command_timeout: 20m
           script: |
-            echo "🚀 Starting Deployment on VPS: 72.61.171.164..."
-
-            # 1. Target Directory
-            APP_DIR="/var/www/WorknAi.Media"
-
-            if [ ! -d "$APP_DIR" ]; then
-              echo "📂 App directory does not exist. Creating and cloning..."
-              mkdir -p /var/www
-              cd /var/www
-              git clone https://github.com/WorknAi006/WorknAi.Media.git WorknAi.Media
-              cd "$APP_DIR"
-            else
-              echo "📂 Entering existing app directory: $APP_DIR"
-              cd "$APP_DIR"
-              git fetch origin main
-              git reset --hard origin/main
-            fi
-
-            # 2. Install Root Dependencies
-            echo "📦 Installing npm dependencies..."
-            npm install
-
-            # 3. Build Backend
-            echo "🔨 Building backend..."
-            cd "$APP_DIR/services/backend"
-            npm install
-            npm run build
-
-            # 4. Build Next.js Web Frontend
-            echo "🔨 Building frontend..."
-            cd "$APP_DIR/apps/web"
-            npm install
-            npm run build
-
-            # 5. Reload PM2 Applications
-            echo "⚡ Starting / Reloading PM2 processes..."
+            set -e
             cd "$APP_DIR"
-            pm2 startOrReload ecosystem.config.js --update-env
-            pm2 save
+            if [ -f env.prod ]; then mv env.prod .env && chmod 600 .env; fi
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            IMAGE_TAG="$IMAGE_TAG" WEB_IMAGE="$WEB_IMAGE" BACKEND_IMAGE="$BACKEND_IMAGE" \
+              bash deploy/scripts/deploy.sh
 
-            echo "✅ Deployment completed successfully! WorknAI Media is live! 🚀"
+      - name: Smoke test
+        run: |
+          for url in "$PUBLIC_URL/api/health" "$PUBLIC_URL/" "$ADMIN_URL/login"; do
+            for i in 1 2 3 4 5 6; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' -L "$url" || true)
+              echo "$url -> $code"
+              [ "$code" = "200" ] && break
+              [ "$i" = "6" ] && { echo "::error::$url returned $code"; exit 1; }
+              sleep 10
+            done
+          done

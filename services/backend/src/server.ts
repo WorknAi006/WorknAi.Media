@@ -16,8 +16,28 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+// Behind nginx: trust X-Forwarded-* for client IP / protocol
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
+// CORS_ORIGINS="https://worknai.media,https://admin.worknai.media" (empty = allow all, for local dev)
+const allowedOrigins = (process.env.CORS_ORIGINS || "")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+app.use(
+    cors({
+        origin: (origin, callback) => {
+            if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+            return callback(null, false);
+        },
+        credentials: true,
+    })
+);
+app.use(express.json({ limit: "10mb" }));
 
 app.get("/", (_req, res) => {
     res.send("Backend Live 🚀");
@@ -28,6 +48,11 @@ app.get("/api", (_req, res) => {
         success: true,
         message: "WorknAI Backend Running 🚀",
     });
+});
+
+// Used by Docker healthcheck and the CI/CD post-deploy check
+app.get("/api/health", (_req, res) => {
+    res.json({ success: true, status: "ok", uptime: process.uptime() });
 });
 
 app.use("/api/auth", authRoutes);
@@ -44,7 +69,18 @@ app.use("/api/services", servicesRoutes);
 
 const PORT = Number(process.env.PORT) || 5001;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
-    startCronWorker();
+    if (process.env.DISABLE_CRON !== "true") {
+        startCronWorker();
+    }
 });
+
+// Graceful shutdown so `docker compose up` rollouts don't drop in-flight requests
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+        console.log(`${signal} received, shutting down...`);
+        server.close(() => process.exit(0));
+        setTimeout(() => process.exit(1), 10_000).unref();
+    });
+}

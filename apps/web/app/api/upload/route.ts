@@ -77,7 +77,9 @@ export async function POST(request: NextRequest) {
     const sanitizedBase = rawBaseName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) || "upload";
     const uniqueFileName = `${sanitizedBase}_${Date.now()}${safeExt}`;
 
-    const targetDir = path.join(process.cwd(), "public", "videos");
+    // In production UPLOAD_DIR is a persistent volume that nginx serves at /videos/
+    // (Next.js does not serve files added to public/ after the build).
+    const targetDir = process.env.UPLOAD_DIR || path.join(process.cwd(), "public", "videos");
     await mkdir(targetDir, { recursive: true });
 
     const filePath = path.join(targetDir, uniqueFileName);

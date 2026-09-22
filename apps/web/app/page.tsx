@@ -13,8 +13,9 @@ import Pricing from "../components/pricing/Pricing";
 
 async function getPublishedReels() {
   try {
-    const rawUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (!rawUrl) return [];
+    // Server-side fetch needs an absolute URL; in Docker this is the internal backend service
+    const rawUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL;
+    if (!rawUrl || !/^https?:\/\//.test(rawUrl)) return [];
     const apiBase = rawUrl.endsWith("/api") ? rawUrl : `${rawUrl}/api`;
     const res = await fetch(`${apiBase}/posts?type=reel&status=published`, {
       cache: "no-store",

@@ -16,6 +16,7 @@ import {
   Globe,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { clearSession } from "@/app/lib/session";
 
 // Standard Workspace menus for team members
 const employeeMenus = [
@@ -66,9 +67,7 @@ export default function Sidebar() {
   }, []);
 
   const handleLogout = () => {
-    document.cookie = "worknai_role=; path=/; max-age=0";
-    document.cookie = "worknai_user=; path=/; max-age=0";
-    localStorage.removeItem("worknai_user");
+    clearSession();
     window.location.href = "/login";
   };
 
