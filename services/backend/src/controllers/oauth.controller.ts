@@ -150,7 +150,6 @@ export const handleInstagramCallback = async (req: Request, res: Response) => {
   const appId =
     process.env.META_APP_ID ||
     process.env.INSTAGRAM_APP_ID;
-    "1054238947409813";
   const appSecret =
     process.env.META_APP_SECRET ||
     process.env.INSTAGRAM_APP_SECRET;
