@@ -176,11 +176,14 @@ export const addInstagramAccount = async (req: Request, res: Response) => {
       });
     }
 
+    const { encryptToken } = await import("../lib/encryption");
+    const encryptedToken = encryptToken(access_token.trim());
+
     // 2. If set_as_default is true, unset other defaults
     if (set_as_default) {
       await supabase
         .from("social_integrations")
-        .update({ is_default: false })
+        .update({ is_default: false, is_primary: false })
         .eq("platform", "instagram");
     }
 
@@ -189,20 +192,25 @@ export const addInstagramAccount = async (req: Request, res: Response) => {
       .from("social_integrations")
       .select("id")
       .eq("platform", "instagram")
-      .eq("account_id", account_id.trim())
+      .or(`account_id.eq.${account_id.trim()},instagram_id.eq.${account_id.trim()}`)
       .maybeSingle();
 
     let savedAccount: any = null;
+    const cleanHandle = account_name.trim().replace(/^@/, "");
 
     if (existing) {
       const { data, error } = await supabase
         .from("social_integrations")
         .update({
-          account_name: account_name.trim().replace(/^@/, ""),
-          access_token: access_token.trim(),
+          account_name: cleanHandle,
+          username: cleanHandle,
+          instagram_id: account_id.trim(),
+          access_token: encryptedToken,
           app_id: appId,
           connected: true,
+          status: "connected",
           is_default: set_as_default !== undefined ? Boolean(set_as_default) : false,
+          is_primary: set_as_default !== undefined ? Boolean(set_as_default) : false,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existing.id)
@@ -217,11 +225,17 @@ export const addInstagramAccount = async (req: Request, res: Response) => {
         .insert({
           platform: "instagram",
           account_id: account_id.trim(),
-          account_name: account_name.trim().replace(/^@/, ""),
-          access_token: access_token.trim(),
+          instagram_id: account_id.trim(),
+          account_name: cleanHandle,
+          username: cleanHandle,
+          display_name: cleanHandle,
+          access_token: encryptedToken,
           app_id: appId,
           connected: true,
+          status: "connected",
           is_default: set_as_default !== undefined ? Boolean(set_as_default) : false,
+          is_primary: set_as_default !== undefined ? Boolean(set_as_default) : false,
+          connected_at: new Date().toISOString(),
         })
         .select()
         .single();
@@ -249,13 +263,13 @@ export const setDefaultInstagramAccount = async (req: Request, res: Response) =>
     // Unset other defaults
     await supabase
       .from("social_integrations")
-      .update({ is_default: false })
+      .update({ is_default: false, is_primary: false })
       .eq("platform", "instagram");
 
     // Set this one as default
     const { data, error } = await supabase
       .from("social_integrations")
-      .update({ is_default: true, connected: true })
+      .update({ is_default: true, is_primary: true, connected: true, status: "connected" })
       .eq("id", id)
       .select()
       .single();

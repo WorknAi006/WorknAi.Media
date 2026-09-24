@@ -45,6 +45,7 @@ export const checkAndPublishScheduledPosts = async () => {
           media_url: post.media_url,
           thumbnail: post.thumbnail,
           type: post.type,
+          brand: post.brand,
         });
 
         if (igResult.success && igResult.metaPostId) {
@@ -92,12 +93,103 @@ export const checkAndPublishScheduledPosts = async () => {
   }
 };
 
+/**
+ * Daily Cron Worker: Check tokens older than 45 days (or expiring within 15 days) and refresh them.
+ * If refresh fails, mark status = 'reconnect_required'.
+ */
+export const checkAndRefreshExpiringInstagramTokens = async () => {
+  try {
+    console.log("🔄 [Token Refresh Worker] Checking Instagram tokens older than 45 days...");
+
+    // Query active Instagram integrations
+    const { data: accounts, error } = await supabase
+      .from("social_integrations")
+      .select("*")
+      .eq("platform", "instagram")
+      .eq("connected", true)
+      .neq("status", "disconnected");
+
+    if (error) {
+      console.error("❌ [Token Refresh Worker] Failed to query integrations:", error.message);
+      return;
+    }
+
+    if (!accounts || accounts.length === 0) {
+      console.log("ℹ️ [Token Refresh Worker] No active Instagram accounts found.");
+      return;
+    }
+
+    const now = Date.now();
+    const FORTY_FIVE_DAYS_MS = 45 * 24 * 60 * 60 * 1000;
+    const FIFTEEN_DAYS_MS = 15 * 24 * 60 * 60 * 1000;
+
+    const { decryptToken, encryptToken } = await import("../lib/encryption");
+    const { refreshSingleToken } = await import("../controllers/oauth.controller");
+
+    for (const acc of accounts) {
+      const connectedAtTime = acc.connected_at ? new Date(acc.connected_at).getTime() : new Date(acc.created_at).getTime();
+      const expiresAtTime = acc.expires_at ? new Date(acc.expires_at).getTime() : 0;
+
+      const isOlderThan45Days = now - connectedAtTime >= FORTY_FIVE_DAYS_MS;
+      const isExpiringWithin15Days = expiresAtTime > 0 && expiresAtTime - now <= FIFTEEN_DAYS_MS;
+
+      // Refresh if older than 45 days OR expiring soon
+      if (isOlderThan45Days || isExpiringWithin15Days) {
+        console.log(`⏳ [Token Refresh Worker] Refreshing token for @${acc.username || acc.account_name} (ID: ${acc.id})...`);
+        const rawToken = decryptToken(acc.access_token);
+        const refreshResult = await refreshSingleToken(rawToken);
+
+        if (refreshResult.success && refreshResult.accessToken) {
+          const encryptedNewToken = encryptToken(refreshResult.accessToken);
+          const newExpiresAt = new Date(
+            Date.now() + (refreshResult.expiresIn || 5184000) * 1000
+          ).toISOString();
+
+          await supabase
+            .from("social_integrations")
+            .update({
+              access_token: encryptedNewToken,
+              expires_at: newExpiresAt,
+              status: "connected",
+              connected: true,
+              connected_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", acc.id);
+
+          console.log(`✅ [Token Refresh Worker] Successfully refreshed token for @${acc.username || acc.account_name}. New expiry: ${newExpiresAt}`);
+        } else {
+          console.warn(`⚠️ [Token Refresh Worker] Token refresh failed for @${acc.username || acc.account_name}: ${refreshResult.error}. Marking reconnect_required.`);
+          await supabase
+            .from("social_integrations")
+            .update({
+              status: "reconnect_required",
+              connected: false,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", acc.id);
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error("❌ [Token Refresh Worker] Unexpected error:", err.message);
+  }
+};
+
 export const startCronWorker = () => {
   console.log("⏰ [Scheduler Worker] Auto-publish cron job initialized (Every 1 minute).");
 
-  // Run every 1 minute
+  // Run every 1 minute for post publishing
   cron.schedule("* * * * *", async () => {
     await checkAndPublishScheduledPosts();
   });
+
+  console.log("⏰ [Token Refresh Worker] Daily token refresh cron initialized (Every day at midnight).");
+
+  // Run once daily at 00:00 (Midnight)
+  cron.schedule("0 0 * * *", async () => {
+    await checkAndRefreshExpiringInstagramTokens();
+  });
 };
+
 

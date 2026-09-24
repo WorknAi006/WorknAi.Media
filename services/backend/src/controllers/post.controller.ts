@@ -45,6 +45,9 @@ export const getPosts = async (req: Request, res: Response) => {
     }
 };
 
+const includesInstagram = (platforms: unknown): boolean =>
+    Array.isArray(platforms) && platforms.some((p) => String(p).toLowerCase() === "instagram");
+
 // CREATE Post / Reel
 export const createPost = async (req: Request, res: Response) => {
     try {
@@ -74,6 +77,12 @@ export const createPost = async (req: Request, res: Response) => {
         const resolvedThumbnail = thumbnail || cover_url || media_url || null;
         const resolvedMediaUrl = media_url || cover_url || thumbnail || null;
 
+        const resolvedPlatforms = Array.isArray(platforms) ? platforms : platforms ? [platforms] : [];
+
+        // "Go live now" on Instagram: queue it for the scheduler worker, which publishes within a minute
+        // and marks it published only after Instagram accepts it
+        const publishNowToInstagram = status === "published" && includesInstagram(resolvedPlatforms);
+
         const payload = {
             title,
             slug: resolvedSlug,
@@ -81,10 +90,12 @@ export const createPost = async (req: Request, res: Response) => {
             content,
             media_url: resolvedMediaUrl,
             thumbnail: resolvedThumbnail,
-            status,
-            scheduled_at: status === "scheduled" ? scheduled_at : null,
+            status: publishNowToInstagram ? "scheduled" : status,
+            scheduled_at: publishNowToInstagram
+                ? new Date().toISOString()
+                : status === "scheduled" ? scheduled_at : null,
             brand: brand || null,
-            platforms: Array.isArray(platforms) ? platforms : platforms ? [platforms] : [],
+            platforms: resolvedPlatforms,
         };
 
         const { data, error } = await supabase
@@ -144,6 +155,20 @@ export const updatePost = async (req: Request, res: Response) => {
             updateData.scheduled_at = status === "scheduled" ? scheduled_at : null;
         } else if (scheduled_at !== undefined) {
             updateData.scheduled_at = scheduled_at;
+        }
+
+        // Switching to "published" on Instagram: queue it once, unless it is already live there
+        if (status === "published") {
+            const { data: current } = await supabase
+                .from("posts")
+                .select("platforms, meta_post_id")
+                .eq("id", id)
+                .single();
+
+            if (current && !current.meta_post_id && includesInstagram(updateData.platforms ?? current.platforms)) {
+                updateData.status = "scheduled";
+                updateData.scheduled_at = new Date().toISOString();
+            }
         }
 
         const { data, error } = await supabase

@@ -14,52 +14,54 @@ import {
   Trash2,
   Star,
   X,
-  KeyRound,
-  User,
-  Hash,
   Layers,
-  HelpCircle,
+  Sparkles,
+  Link2,
+  Unlink,
 } from "lucide-react";
 import PlatformIcon from "@/components/dashboard/scheduler/PlatformIcon";
 
-interface ConnectedAccount {
-  id: string;
-  platform: string;
-  account_id: string;
-  account_name: string;
-  connected: boolean;
-  is_default: boolean;
-  created_at: string;
-  updated_at: string;
+interface BrandItem {
+  id: number | string;
+  name: string;
+  website?: string | null;
+  logo?: string | null;
 }
 
-interface InstagramAccountData {
+interface InstagramIntegration {
   id: string;
+  platform: string;
+  instagram_id: string;
   username: string;
-  accountType: string;
-  mediaCount: number;
+  display_name: string;
+  profile_picture?: string | null;
+  expires_at?: string | null;
+  connected_at?: string;
+  is_primary: boolean;
+  status: "connected" | "reconnect_required" | "disconnected" | string;
+  connected: boolean;
+}
+
+interface BrandCardItem {
+  brand: BrandItem | null;
+  integration: InstagramIntegration | null;
 }
 
 export default function IntegrationsPage() {
   const [loading, setLoading] = useState(true);
-  const [accounts, setAccounts] = useState<ConnectedAccount[]>([]);
-  const [activeAccountData, setActiveAccountData] = useState<InstagramAccountData | null>(null);
+  const [brandCards, setBrandCards] = useState<BrandCardItem[]>([]);
+  const [availableBrands, setAvailableBrands] = useState<BrandItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testPublishing, setTestPublishing] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  // Modal State
+  // Simplified Modal State (Brand Dropdown + Connect Instagram Button ONLY)
   const [showAddModal, setShowAddModal] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedBrandId, setSelectedBrandId] = useState<string>("");
+  const [isStartingOAuth, setIsStartingOAuth] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
-
-  // New Account Form State
-  const [accountName, setAccountName] = useState("");
-  const [accountId, setAccountId] = useState("");
-  const [accessToken, setAccessToken] = useState("");
-  const [setAsDefault, setSetAsDefault] = useState(true);
 
   const rawUrl = process.env.NEXT_PUBLIC_API_URL || "";
   const apiBase = rawUrl ? (rawUrl.endsWith("/api") ? rawUrl : `${rawUrl}/api`) : "/api";
@@ -72,37 +74,60 @@ export default function IntegrationsPage() {
     return headers;
   };
 
-  // Load all connected accounts and status of active default
+  // Load all brands and connected integrations
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
-      // 1. Fetch all connected accounts
-      const accRes = await fetch(`${apiBase}/scheduler/instagram/accounts`, {
+      // 1. Fetch integrations overview with brand mappings
+      const res = await fetch(`${apiBase}/integrations`, {
         cache: "no-store",
         headers: getHeaders(),
       });
-      const accJson = await accRes.json();
-      if (accJson.success) {
-        setAccounts(accJson.accounts || []);
+      const json = await res.json();
+
+      if (json.success && Array.isArray(json.data)) {
+        setBrandCards(json.data);
+      } else {
+        // Fallback to legacy scheduler endpoint if needed
+        const legacyRes = await fetch(`${apiBase}/scheduler/instagram/accounts`, {
+          cache: "no-store",
+          headers: getHeaders(),
+        });
+        const legacyJson = await legacyRes.json();
+        if (legacyJson.success) {
+          const mapped = (legacyJson.accounts || []).map((acc: any) => ({
+            brand: { id: acc.account_id, name: acc.account_name },
+            integration: {
+              id: acc.id,
+              platform: "instagram",
+              instagram_id: acc.account_id,
+              username: acc.account_name,
+              display_name: acc.account_name,
+              is_primary: acc.is_default,
+              status: acc.connected ? "connected" : "disconnected",
+              connected: acc.connected,
+              created_at: acc.created_at,
+            },
+          }));
+          setBrandCards(mapped);
+        }
       }
 
-      // 2. Fetch live status of primary active account
-      const statRes = await fetch(`${apiBase}/scheduler/instagram/status`, {
+      // 2. Fetch list of clients/brands for the modal dropdown
+      const clientsRes = await fetch(`${apiBase}/clients`, {
         cache: "no-store",
         headers: getHeaders(),
       });
-      const statJson = await statRes.json();
-      if (statJson.success && statJson.connected) {
-        setActiveAccountData(statJson.account);
-      } else {
-        setActiveAccountData(null);
-        if (accJson.accounts?.length > 0) {
-          setError(statJson.error || "Primary account not reachable.");
+      const clientsJson = await clientsRes.json();
+      if (clientsJson.success && Array.isArray(clientsJson.data)) {
+        setAvailableBrands(clientsJson.data);
+        if (clientsJson.data.length > 0 && !selectedBrandId) {
+          setSelectedBrandId(String(clientsJson.data[0].id));
         }
       }
     } catch (err: any) {
-      setError(err.message || "Failed to load integrations.");
+      setError(err.message || "Failed to load social integrations.");
     } finally {
       setLoading(false);
     }
@@ -112,6 +137,26 @@ export default function IntegrationsPage() {
     loadData();
   }, []);
 
+  // Listen for OAuth completion message from popup window
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === "INSTAGRAM_OAUTH_SUCCESS") {
+        setShowAddModal(false);
+        setIsStartingOAuth(false);
+        const username = event.data.account?.username;
+        setTestResult(`🎉 Successfully connected @${username || "Instagram profile"} with 60-day auto-refresh token!`);
+        loadData();
+      } else if (event.data?.type === "INSTAGRAM_OAUTH_FAILURE") {
+        setIsStartingOAuth(false);
+        setModalError(event.data.error || "Instagram authorization failed.");
+        loadData();
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
+
   const handleRefresh = async () => {
     setTesting(true);
     setTestResult(null);
@@ -119,10 +164,66 @@ export default function IntegrationsPage() {
     setTesting(false);
   };
 
-  // Set account as default
-  const handleSetDefault = async (id: string, name: string) => {
+  // Launch 1-Click Instagram OAuth Popup
+  const startOAuthFlow = async (brandId?: string | number) => {
+    setModalError(null);
+    setIsStartingOAuth(true);
+
+    const targetBrand = brandId !== undefined ? String(brandId) : selectedBrandId;
+
     try {
-      const res = await fetch(`${apiBase}/scheduler/instagram/accounts/${id}/default`, {
+      const width = 600;
+      const height = 750;
+      const left = window.screenX + (window.outerWidth - width) / 2;
+      const top = window.screenY + (window.outerHeight - height) / 2;
+
+      // Open blank popup immediately to avoid browser popup blockers
+      const popup = window.open(
+        "about:blank",
+        "InstagramConnectPopup",
+        `width=${width},height=${height},left=${left},top=${top},status=0,toolbar=0,menubar=0,location=1`
+      );
+
+      if (!popup) {
+        throw new Error("Popup blocked by browser. Please allow popups for this site.");
+      }
+
+      popup.document.write(`
+        <html>
+          <body style="background: #09090b; color: #fff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0;">
+            <div style="text-align: center;">
+              <h3 style="margin-bottom: 8px;">Connecting to Instagram...</h3>
+              <p style="color: #a1a1aa; font-size: 13px;">Redirecting to Meta Instagram Login</p>
+            </div>
+          </body>
+        </html>
+      `);
+
+      // Fetch signed authorization URL from backend
+      const res = await fetch(`${apiBase}/oauth/instagram/start?brand_id=${encodeURIComponent(targetBrand)}`, {
+        headers: getHeaders(),
+      });
+      const data = await res.json();
+
+      if (!data.success || !data.authUrl) {
+        popup.close();
+        throw new Error(data.error || "Failed to generate Meta Instagram authorization link.");
+      }
+
+      // Redirect popup to Meta OAuth
+      popup.location.href = data.authUrl;
+    } catch (err: any) {
+      setModalError(err.message || "Failed to start Instagram authorization.");
+    } finally {
+      setIsStartingOAuth(false);
+    }
+  };
+
+  // Set account as primary default
+  const handleSetPrimary = async (id: string, name: string) => {
+    setActionLoadingId(id);
+    try {
+      const res = await fetch(`${apiBase}/integrations/${id}/primary`, {
         method: "PUT",
         headers: getHeaders(),
       });
@@ -131,20 +232,45 @@ export default function IntegrationsPage() {
         setTestResult(`@${name} is now the primary active Instagram account.`);
         await loadData();
       } else {
-        alert(data.error || "Failed to set default account");
+        alert(data.error || "Failed to set primary account");
       }
     } catch (err: any) {
       alert(err.message || "Request failed");
+    } finally {
+      setActionLoadingId(null);
     }
   };
 
-  // Disconnect / Delete account
-  const handleDeleteAccount = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to disconnect @${name}?`)) return;
-
+  // Refresh Instagram Profile (Avatar, username, display name)
+  const handleRefreshProfile = async (id: string, name: string) => {
+    setActionLoadingId(id);
     try {
-      const res = await fetch(`${apiBase}/scheduler/instagram/accounts/${id}`, {
-        method: "DELETE",
+      const res = await fetch(`${apiBase}/integrations/${id}/refresh-profile`, {
+        method: "POST",
+        headers: getHeaders(),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult(`Refreshed live Instagram profile for @${name}`);
+        await loadData();
+      } else {
+        alert(data.error || "Failed to refresh profile");
+      }
+    } catch (err: any) {
+      alert(err.message || "Request failed");
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Disconnect Instagram Account
+  const handleDisconnect = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to disconnect @${name}? You can reconnect anytime with 1 click.`)) return;
+
+    setActionLoadingId(id);
+    try {
+      const res = await fetch(`${apiBase}/integrations/${id}/disconnect`, {
+        method: "POST",
         headers: getHeaders(),
       });
       const data = await res.json();
@@ -156,12 +282,38 @@ export default function IntegrationsPage() {
       }
     } catch (err: any) {
       alert(err.message || "Request failed");
+    } finally {
+      setActionLoadingId(null);
     }
   };
 
-  // Test live publish
-  const handleTestPublish = async (accName?: string) => {
-    const target = accName || activeAccountData?.username || "connected profile";
+  // Permanently delete Instagram Account record
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Permanently delete @${name}? You will need to connect it again from scratch.`)) return;
+
+    setActionLoadingId(id);
+    try {
+      const res = await fetch(`${apiBase}/integrations/${id}`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestResult(`@${name} has been deleted.`);
+        await loadData();
+      } else {
+        alert(data.error || "Failed to delete account");
+      }
+    } catch (err: any) {
+      alert(err.message || "Request failed");
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  // Live test post
+  const handleTestPublish = async (brandName: string, accName?: string) => {
+    const target = accName || brandName;
     if (!confirm(`Publish a live test photo to @${target} on Instagram?`)) return;
 
     setTestPublishing(target);
@@ -171,8 +323,8 @@ export default function IntegrationsPage() {
         method: "POST",
         headers: getHeaders(true),
         body: JSON.stringify({
-          title: "WorknAI Media OS Live Test 🚀",
-          content: "Automated test dispatch from WorknAI Media Studio Scheduler.\n\n#WorknAI #Automation #AIStudio #MarketingOS",
+          title: `WorknAI Media OS Live Test 🚀 [${brandName}]`,
+          content: `Autonomous test dispatch from WorknAI Media OS for ${brandName}.\n\n#WorknAI #MarketingOS #AIStudio #Automation`,
           media_url: "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1080&auto=format&fit=crop&q=80",
           type: "image",
         }),
@@ -192,50 +344,6 @@ export default function IntegrationsPage() {
     }
   };
 
-  // Submit New Account Form
-  const handleAddAccountSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setModalError(null);
-
-    if (!accountName.trim() || !accountId.trim() || !accessToken.trim()) {
-      setModalError("Please fill in Account Handle, Account ID, and Access Token.");
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const res = await fetch(`${apiBase}/scheduler/instagram/accounts`, {
-        method: "POST",
-        headers: getHeaders(true),
-        body: JSON.stringify({
-          account_name: accountName.trim(),
-          account_id: accountId.trim(),
-          access_token: accessToken.trim(),
-          set_as_default: setAsDefault,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!data.success) {
-        setModalError(data.error || "Failed to verify or connect Instagram account.");
-        return;
-      }
-
-      // Success
-      setShowAddModal(false);
-      setAccountName("");
-      setAccountId("");
-      setAccessToken("");
-      setTestResult(`🎉 Successfully connected @${data.account.account_name}!`);
-      await loadData();
-    } catch (err: any) {
-      setModalError(err.message || "Failed to connect to backend server.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   return (
     <div className="space-y-8 max-w-6xl">
       {/* Header Banner */}
@@ -243,13 +351,13 @@ export default function IntegrationsPage() {
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3.5 py-1 text-xs font-semibold text-blue-400 mb-2">
             <Radio className="h-3.5 w-3.5 animate-pulse" />
-            <span>Social API Connectors</span>
+            <span>Instagram 1-Click OAuth</span>
           </div>
           <h1 className="text-3xl font-extrabold tracking-tight text-white">
             Connected Channels & Profiles
           </h1>
           <p className="mt-1 text-sm text-zinc-400">
-            Manage authenticated Instagram Business accounts, tokens, and multi-profile autonomous dispatch.
+            Manage authenticated Instagram Business accounts, 60-day auto-refreshing tokens, and autonomous brand dispatch.
           </p>
         </div>
 
@@ -259,16 +367,16 @@ export default function IntegrationsPage() {
               setModalError(null);
               setShowAddModal(true);
             }}
-            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 px-4 py-2.5 text-xs font-bold text-white shadow-[0_0_20px_rgba(59,130,246,0.3)] hover:brightness-110 transition"
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-[0_0_20px_rgba(99,102,241,0.35)] hover:brightness-110 transition cursor-pointer"
           >
             <Plus className="h-4 w-4" />
-            <span>Add Instagram Account</span>
+            <span>Connect Instagram</span>
           </button>
 
           <button
             onClick={handleRefresh}
             disabled={testing}
-            className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-semibold text-zinc-200 hover:bg-white/10 transition disabled:opacity-50"
+            className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-semibold text-zinc-200 hover:bg-white/10 transition disabled:opacity-50 cursor-pointer"
           >
             <RefreshCw className={`h-4 w-4 ${testing ? "animate-spin text-blue-400" : ""}`} />
             <span>Refresh</span>
@@ -280,7 +388,7 @@ export default function IntegrationsPage() {
       {testResult && (
         <div
           className={`rounded-2xl border p-4 text-xs font-medium flex items-center justify-between ${
-            testResult.startsWith("Success") || testResult.includes("🎉") || testResult.includes("primary")
+            testResult.startsWith("Success") || testResult.includes("🎉") || testResult.includes("primary") || testResult.includes("Refreshed")
               ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
               : "border-amber-500/30 bg-amber-500/10 text-amber-300"
           }`}
@@ -289,17 +397,6 @@ export default function IntegrationsPage() {
             <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
             <span>{testResult}</span>
           </div>
-          {testResult.startsWith("Success") && (
-            <a
-              href={`https://www.instagram.com/${activeAccountData?.username || "worknaiintern1"}/`}
-              target="_blank"
-              rel="noreferrer"
-              className="underline flex items-center gap-1 hover:text-white"
-            >
-              <span>View on Instagram</span>
-              <ExternalLink className="h-3 w-3" />
-            </a>
-          )}
         </div>
       )}
 
@@ -314,114 +411,205 @@ export default function IntegrationsPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-bold text-white flex items-center gap-2">
-            <span>Connected Instagram Profiles</span>
+            <span>Managed Brand Integrations</span>
             <span className="rounded-full bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-xs text-blue-400 font-mono">
-              {accounts.length}
+              {brandCards.length}
             </span>
           </h2>
           <span className="text-xs text-zinc-400">
-            Active default profile is used for scheduled autonomous publishing.
+            Tokens auto-refresh daily before 60-day expiry. No manual token paste required.
           </span>
         </div>
 
+        {/* Brand Integration Cards Grid */}
         <div className="grid grid-cols-1 gap-5">
-          {accounts.map((acc) => {
-            const isPrimary = acc.is_default;
+          {brandCards.map((item, idx) => {
+            const brand = item.brand;
+            const integration = item.integration;
+            const isConnected = Boolean(integration && integration.connected && integration.status === "connected");
+            const isReconnectRequired = Boolean(integration && integration.status === "reconnect_required");
+            const isPrimary = Boolean(integration && integration.is_primary);
+
+            const brandName = brand?.name || integration?.display_name || "Managed Brand";
+            const brandHandle = integration?.username ? `@${integration.username}` : brand?.website ? brand.website.replace(/^https?:\/\//, "") : null;
+
             return (
               <div
-                key={acc.id}
+                key={integration?.id || `brand-${brand?.id || idx}`}
                 className={`rounded-3xl border p-6 backdrop-blur-2xl transition relative overflow-hidden ${
                   isPrimary
                     ? "border-blue-500/40 bg-gradient-to-b from-[#0F172A] to-[#070D1D] shadow-[0_0_30px_rgba(59,130,246,0.15)]"
-                    : "border-white/10 bg-white/[0.03] hover:border-white/20"
+                    : isConnected
+                    ? "border-white/10 bg-white/[0.03] hover:border-white/20"
+                    : "border-white/5 bg-black/30 hover:border-white/15"
                 }`}
               >
-                {/* Glow for default */}
+                {/* Glow for Primary Default */}
                 {isPrimary && (
                   <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-gradient-to-br from-blue-500/20 via-cyan-500/10 to-transparent blur-3xl pointer-events-none" />
                 )}
 
                 <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between relative z-10">
                   <div className="flex items-start gap-4">
-                    {/* Platform Icon */}
-                    <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-amber-500 via-rose-500 to-purple-600 p-0.5 shadow-lg shadow-rose-500/20">
-                      <div className="flex h-full w-full items-center justify-center rounded-[14px] bg-[#0A0E1A]">
-                        <PlatformIcon platform="Instagram" className="h-7 w-7 text-white" />
-                      </div>
+                    {/* Platform & Avatar Icon */}
+                    <div className="relative shrink-0">
+                      {integration?.profile_picture ? (
+                        <img
+                          src={integration.profile_picture}
+                          alt={brandName}
+                          className="h-14 w-14 rounded-2xl object-cover border border-white/10 shadow-lg shadow-purple-500/10"
+                        />
+                      ) : (
+                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-amber-500 via-rose-500 to-purple-600 p-0.5 shadow-lg shadow-rose-500/20">
+                          <div className="flex h-full w-full items-center justify-center rounded-[14px] bg-[#0A0E1A]">
+                            <PlatformIcon platform="Instagram" className="h-7 w-7 text-white" />
+                          </div>
+                        </div>
+                      )}
+                      {isConnected && (
+                        <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-2 ring-[#0A0E1A]">
+                          <CheckCircle2 className="h-3 w-3 text-white" />
+                        </span>
+                      )}
                     </div>
 
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-lg font-bold text-white tracking-wide">
-                          @{acc.account_name}
+                          {brandName}
                         </h3>
 
-                        {isPrimary ? (
+                        {/* Status Badges */}
+                        {isConnected ? (
                           <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
-                            <Star className="h-3 w-3 fill-emerald-400" />
-                            Primary Default
+                            <CheckCircle2 className="h-3 w-3" />
+                            Connected
+                          </span>
+                        ) : isReconnectRequired ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-bold text-amber-400">
+                            <AlertCircle className="h-3 w-3" />
+                            Reconnect Required
                           </span>
                         ) : (
-                          <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-[11px] text-zinc-400">
-                            Secondary
+                          <span className="rounded-full border border-zinc-700 bg-zinc-800/80 px-2.5 py-0.5 text-[11px] font-medium text-zinc-400">
+                            Not Connected
                           </span>
                         )}
 
-                        <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-0.5 text-[10px] font-medium text-blue-400">
-                          <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />
-                          Meta Graph API v21.0
+                        {isPrimary && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/40 bg-blue-500/20 px-2.5 py-0.5 text-[11px] font-bold text-blue-300">
+                            <Star className="h-3 w-3 fill-blue-400" />
+                            Primary Account
+                          </span>
+                        )}
+
+                        <span className="inline-flex items-center gap-1 rounded-full border border-purple-500/30 bg-purple-500/10 px-2 py-0.5 text-[10px] font-medium text-purple-300">
+                          Meta Instagram OAuth
                         </span>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-4 text-xs text-zinc-400 pt-1">
-                        <span>
-                          Account ID: <code className="text-zinc-300 font-mono">{acc.account_id}</code>
-                        </span>
-                        <span>
-                          Connected: <span className="text-zinc-300">{new Date(acc.created_at).toLocaleDateString()}</span>
-                        </span>
+                      {/* Subtitle / Handle */}
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-400 pt-1">
+                        {brandHandle && (
+                          <span className="text-zinc-300 font-medium font-mono">
+                            {brandHandle}
+                          </span>
+                        )}
+                        {integration?.instagram_id && (
+                          <span>
+                            ID: <code className="text-zinc-400 font-mono">{integration.instagram_id}</code>
+                          </span>
+                        )}
+                        {integration?.expires_at && (
+                          <span className="text-zinc-400">
+                            Expires: <span className="text-zinc-300">{new Date(integration.expires_at).toLocaleDateString()}</span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Actions for this Account */}
+                  {/* Actions for this Card */}
                   <div className="flex flex-wrap items-center gap-2.5">
-                    {!isPrimary && (
-                      <button
-                        onClick={() => handleSetDefault(acc.id, acc.account_name)}
-                        className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3.5 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/20 transition"
-                      >
-                        Set as Default
-                      </button>
-                    )}
+                    {integration && isConnected ? (
+                      <>
+                        {/* Set as Primary */}
+                        {!isPrimary && (
+                          <button
+                            onClick={() => handleSetPrimary(integration.id, integration.username)}
+                            disabled={actionLoadingId === integration.id}
+                            className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-3.5 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/20 transition cursor-pointer"
+                          >
+                            Set as Primary
+                          </button>
+                        )}
 
-                    <button
-                      onClick={() => handleTestPublish(acc.account_name)}
-                      disabled={testPublishing === acc.account_name}
-                      className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-purple-600 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-rose-600/20 hover:from-rose-500 hover:to-purple-500 transition disabled:opacity-50"
-                    >
-                      <Send className={`h-3 w-3 ${testPublishing === acc.account_name ? "animate-bounce" : ""}`} />
-                      <span>{testPublishing === acc.account_name ? "Publishing..." : "Test Post"}</span>
-                    </button>
+                        {/* Test Publish */}
+                        <button
+                          onClick={() => handleTestPublish(brandName, integration.username)}
+                          disabled={testPublishing === integration.username}
+                          className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-rose-600 to-purple-600 px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-rose-600/20 hover:from-rose-500 hover:to-purple-500 transition disabled:opacity-50 cursor-pointer"
+                        >
+                          <Send className={`h-3 w-3 ${testPublishing === integration.username ? "animate-bounce" : ""}`} />
+                          <span>{testPublishing === integration.username ? "Publishing..." : "Test Reel"}</span>
+                        </button>
 
-                    <a
-                      href={`https://www.instagram.com/${acc.account_name}/`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-white/10 transition"
-                    >
-                      <span>Profile</span>
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
+                        {/* Refresh Profile */}
+                        <button
+                          onClick={() => handleRefreshProfile(integration.id, integration.username)}
+                          disabled={actionLoadingId === integration.id}
+                          className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-white/10 transition cursor-pointer"
+                          title="Refresh avatar and profile name from Instagram"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${actionLoadingId === integration.id ? "animate-spin" : ""}`} />
+                          <span>Refresh Profile</span>
+                        </button>
 
-                    {accounts.length > 1 && (
-                      <button
-                        onClick={() => handleDeleteAccount(acc.id, acc.account_name)}
-                        className="rounded-xl border border-red-500/20 bg-red-500/10 p-2 text-red-400 hover:bg-red-500/20 transition"
-                        title="Disconnect profile"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                        {/* View Profile on Instagram */}
+                        <a
+                          href={`https://www.instagram.com/${integration.username}/`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-300 hover:bg-white/10 transition"
+                        >
+                          <span>Profile</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+
+                        {/* Disconnect Button */}
+                        <button
+                          onClick={() => handleDisconnect(integration.id, integration.username)}
+                          disabled={actionLoadingId === integration.id}
+                          className="rounded-xl border border-red-500/20 bg-red-500/10 p-2 text-red-400 hover:bg-red-500/20 transition cursor-pointer"
+                          title="Disconnect Instagram profile"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        {/* Not Connected or Reconnect Required: 1-Click Connect Button */}
+                        <button
+                          onClick={() => startOAuthFlow(brand?.id)}
+                          disabled={isStartingOAuth}
+                          className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-rose-500/20 hover:brightness-110 transition cursor-pointer"
+                        >
+                          <PlatformIcon platform="Instagram" className="h-4 w-4 text-white" />
+                          <span>{isReconnectRequired ? "Reconnect Instagram" : "Connect Instagram"}</span>
+                        </button>
+
+                        {/* Permanently remove a disconnected account record */}
+                        {integration && (
+                          <button
+                            onClick={() => handleDelete(integration.id, integration.username)}
+                            disabled={actionLoadingId === integration.id}
+                            className="rounded-xl border border-red-500/20 bg-red-500/10 p-2 text-red-400 hover:bg-red-500/20 transition cursor-pointer"
+                            title="Delete Instagram account permanently"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -429,39 +617,39 @@ export default function IntegrationsPage() {
             );
           })}
 
-          {accounts.length === 0 && !loading && (
+          {brandCards.length === 0 && !loading && (
             <div className="rounded-3xl border border-dashed border-white/10 p-12 text-center space-y-4">
               <PlatformIcon platform="Instagram" className="h-12 w-12 mx-auto text-zinc-500" />
               <div>
-                <h3 className="text-base font-bold text-white">No Instagram Profiles Connected</h3>
+                <h3 className="text-base font-bold text-white">No Brands or Profiles Found</h3>
                 <p className="text-xs text-zinc-400 max-w-sm mx-auto mt-1">
-                  Connect your Instagram Business or Creator account to enable autonomous publishing.
+                  Connect your Instagram Business or Creator account to start publishing reels automatically.
                 </p>
               </div>
               <button
                 onClick={() => setShowAddModal(true)}
-                className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 shadow-lg shadow-blue-600/30 transition"
+                className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-500 shadow-lg shadow-blue-600/30 transition cursor-pointer"
               >
-                + Connect Your First Profile
+                + Connect Instagram
               </button>
             </div>
           )}
         </div>
 
-        {/* Footnote */}
+        {/* Security & Automation Notice */}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4 text-[11px] text-zinc-400">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-emerald-400" />
-            <span>Tokens are securely stored in Supabase <code className="text-zinc-300 font-mono">social_integrations</code></span>
+            <span>Tokens are AES-256 encrypted and auto-refreshed daily before 60-day expiry.</span>
           </div>
           <div className="flex items-center gap-2">
             <Clock className="h-3.5 w-3.5 text-blue-400" />
-            <span>Auto-Publish Scheduler runs every 1 minute</span>
+            <span>Autonomous Reels Publisher runs every 1 minute</span>
           </div>
         </div>
       </div>
 
-      {/* Other Channels Roadmap */}
+      {/* Upcoming Connectors Section */}
       <div>
         <h3 className="text-sm font-bold uppercase tracking-wider text-zinc-400 mb-4">
           Upcoming Connectors
@@ -517,10 +705,10 @@ export default function IntegrationsPage() {
         </div>
       </div>
 
-      {/* Modal: Connect New Instagram Account */}
+      {/* Streamlined Modal: Brand Dropdown + Connect Instagram Button ONLY */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-4">
-          <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-zinc-950 p-6 sm:p-8 shadow-2xl space-y-6 relative max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+          <div className="w-full max-w-md rounded-3xl border border-white/10 bg-zinc-950 p-6 sm:p-8 shadow-2xl space-y-6 relative">
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-white/10 pb-4">
               <div className="flex items-center gap-3">
@@ -530,14 +718,14 @@ export default function IntegrationsPage() {
                   </div>
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Add Instagram Account</h3>
-                  <p className="text-xs text-zinc-400">Connect a new Business or Creator profile via Meta API</p>
+                  <h3 className="text-lg font-bold text-white">Connect Instagram</h3>
+                  <p className="text-xs text-zinc-400">1-Click Meta Authorization</p>
                 </div>
               </div>
 
               <button
                 onClick={() => setShowAddModal(false)}
-                className="rounded-xl border border-white/10 p-2 text-zinc-400 hover:bg-white/10 hover:text-white transition"
+                className="rounded-xl border border-white/10 p-2 text-zinc-400 hover:bg-white/10 hover:text-white transition cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -551,98 +739,40 @@ export default function IntegrationsPage() {
               </div>
             )}
 
-            {/* Form */}
-            <form onSubmit={handleAddAccountSubmit} className="space-y-4">
-              {/* Account Name */}
-              <div className="space-y-1.5">
+            {/* Form: Brand Selection + 1-Click Connect Button */}
+            <div className="space-y-5">
+              <div className="space-y-2">
                 <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
-                  <User className="h-3.5 w-3.5 text-blue-400" />
-                  <span>Account Username / Handle *</span>
+                  <Layers className="h-3.5 w-3.5 text-blue-400" />
+                  <span>Select Brand / Client *</span>
                 </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-3 text-sm text-zinc-500">@</span>
-                  <input
-                    type="text"
-                    required
-                    value={accountName}
-                    onChange={(e) => setAccountName(e.target.value.replace(/^@/, ""))}
-                    placeholder="my_brand_name"
-                    className="w-full rounded-xl border border-white/10 bg-black/50 py-2.5 pl-8 pr-4 text-sm text-white placeholder-zinc-600 focus:border-blue-500 focus:outline-none transition"
-                  />
-                </div>
-                <p className="text-[11px] text-zinc-500">Your Instagram username without the '@'.</p>
-              </div>
-
-              {/* Account ID */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
-                  <Hash className="h-3.5 w-3.5 text-blue-400" />
-                  <span>Instagram Account ID *</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value.trim())}
-                  placeholder="e.g. 17841400000000000 or 28517787071171649"
-                  className="w-full rounded-xl border border-white/10 bg-black/50 p-2.5 text-sm text-white placeholder-zinc-600 focus:border-blue-500 focus:outline-none font-mono transition"
-                />
-                <p className="text-[11px] text-zinc-500">Instagram User ID or Business ID from Meta Graph API Explorer.</p>
-              </div>
-
-              {/* Access Token */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
-                  <KeyRound className="h-3.5 w-3.5 text-blue-400" />
-                  <span>Long-Lived Access Token *</span>
-                </label>
-                <textarea
-                  rows={3}
-                  required
-                  value={accessToken}
-                  onChange={(e) => setAccessToken(e.target.value.trim())}
-                  placeholder="Paste your Instagram Access Token (starts with IGAA... or EA...)"
-                  className="w-full rounded-xl border border-white/10 bg-black/50 p-2.5 text-xs text-white placeholder-zinc-600 focus:border-blue-500 focus:outline-none font-mono transition"
-                />
-                <p className="text-[11px] text-zinc-500">Must have permissions: instagram_basic, instagram_content_publish.</p>
-              </div>
-
-              {/* Set as Default Option */}
-              <div className="flex items-center gap-3 pt-2">
-                <input
-                  type="checkbox"
-                  id="setDefault"
-                  checked={setAsDefault}
-                  onChange={(e) => setSetAsDefault(e.target.checked)}
-                  className="h-4 w-4 rounded border-white/20 bg-black/50 text-blue-600 focus:ring-blue-500"
-                />
-                <label htmlFor="setDefault" className="text-xs text-zinc-300 font-medium cursor-pointer">
-                  Set as Primary Active Account (default for scheduling)
-                </label>
-              </div>
-
-              {/* Helper collapsible */}
-              <div className="rounded-xl border border-white/5 bg-white/[0.02] p-3 text-xs text-zinc-400 space-y-2">
-                <button
-                  type="button"
-                  onClick={() => setShowHelp(!showHelp)}
-                  className="flex items-center justify-between w-full font-medium text-blue-400 hover:text-blue-300"
+                <select
+                  value={selectedBrandId}
+                  onChange={(e) => setSelectedBrandId(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-zinc-900/90 p-3 text-sm text-white focus:border-blue-500 focus:outline-none transition cursor-pointer"
                 >
-                  <span className="flex items-center gap-1.5">
-                    <HelpCircle className="h-3.5 w-3.5" />
-                    How to get these credentials?
-                  </span>
-                  <span>{showHelp ? "▲" : "▼"}</span>
-                </button>
+                  {availableBrands.map((b) => (
+                    <option key={b.id} value={String(b.id)}>
+                      {b.name}
+                    </option>
+                  ))}
+                  {availableBrands.length === 0 && (
+                    <option value="">No brands found (creates global profile)</option>
+                  )}
+                </select>
+                <p className="text-[11px] text-zinc-400">
+                  Select which Brand will be linked to this Instagram channel.
+                </p>
+              </div>
 
-                {showHelp && (
-                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-zinc-400 pt-1 border-t border-white/5">
-                    <li>Make sure the Instagram account is set to <strong>Professional (Business or Creator)</strong>.</li>
-                    <li>Add the account as <strong>Instagram Tester</strong> in Meta Developer App Roles.</li>
-                    <li>Accept the invitation in Instagram App &gt; Settings &gt; Apps &amp; Websites.</li>
-                    <li>In <strong>Meta Graph API Explorer</strong>, select User Token with <code className="text-zinc-200">instagram_basic</code> &amp; <code className="text-zinc-200">instagram_content_publish</code>.</li>
-                  </ol>
-                )}
+              <div className="rounded-2xl border border-white/5 bg-white/[0.02] p-4 text-xs text-zinc-400 space-y-2">
+                <div className="flex items-center gap-2 text-zinc-300 font-semibold">
+                  <Sparkles className="h-4 w-4 text-amber-400" />
+                  <span>Automatic Authorization</span>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  Clicking below will open the official Instagram Login popup. Simply sign in and click <strong>Allow</strong>. All tokens and profile details are exchanged and stored automatically.
+                </p>
               </div>
 
               {/* Action Buttons */}
@@ -650,21 +780,26 @@ export default function IntegrationsPage() {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs font-semibold text-zinc-400 hover:bg-white/5 hover:text-white transition"
+                  className="rounded-xl border border-white/10 px-4 py-2.5 text-xs font-semibold text-zinc-400 hover:bg-white/5 hover:text-white transition cursor-pointer"
                 >
                   Cancel
                 </button>
 
                 <button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-blue-500/25 hover:brightness-110 transition disabled:opacity-50"
+                  type="button"
+                  onClick={() => startOAuthFlow(selectedBrandId)}
+                  disabled={isStartingOAuth}
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-rose-500/25 hover:brightness-110 transition disabled:opacity-50 cursor-pointer"
                 >
-                  {isSubmitting && <RefreshCw className="h-3.5 w-3.5 animate-spin" />}
-                  <span>{isSubmitting ? "Verifying with Meta..." : "Verify & Connect Account"}</span>
+                  {isStartingOAuth ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <PlatformIcon platform="Instagram" className="h-4 w-4 text-white" />
+                  )}
+                  <span>{isStartingOAuth ? "Opening Meta..." : "Connect Instagram"}</span>
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}

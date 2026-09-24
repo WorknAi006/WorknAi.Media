@@ -10,6 +10,8 @@ import portfolioRoutes from "./routes/portfolio.routes";
 import heroRoutes from "./routes/hero.routes";
 import leadsRoutes from "./routes/leads.routes";
 import servicesRoutes from "./routes/services.routes";
+import oauthRoutes from "./routes/oauth.routes";
+import integrationsRoutes from "./routes/integrations.routes";
 import { startCronWorker } from "./worker/cron.worker";
 
 dotenv.config();
@@ -39,6 +41,7 @@ app.use(
 );
 app.use(express.json({ limit: "10mb" }));
 
+// Instagram OAuth & Integrations Active (HTTPS Tunnel)
 app.get("/", (_req, res) => {
     res.send("Backend Live 🚀");
 });
@@ -66,6 +69,8 @@ app.use("/api/hero", heroRoutes);
 app.use("/api/users/hero", heroRoutes); // Backward compatibility alias
 app.use("/api/leads", leadsRoutes);
 app.use("/api/services", servicesRoutes);
+app.use("/api/oauth", oauthRoutes);
+app.use("/api/integrations", integrationsRoutes);
 
 const PORT = Number(process.env.PORT) || 5001;
 

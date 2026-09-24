@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { decryptToken } from "./encryption";
 
 export interface InstagramPublishResult {
   success: boolean;
@@ -13,36 +14,96 @@ export interface InstagramMediaPost {
   media_url?: string | null;
   thumbnail?: string | null;
   type?: string;
+  brand?: string | null;
 }
 
 /**
  * Fetch active Instagram credentials from Supabase social_integrations
- * or fallback to environment variables.
+ * by Brand (name or ID) or account handle/ID, or fallback to primary default account or environment variables.
  */
-export const getActiveInstagramCredentials = async (targetAccountIdOrName?: string) => {
+export const getActiveInstagramCredentials = async (targetBrandOrAccountIdOrName?: string) => {
   try {
-    let query = supabase
+    let resolvedBrandId: number | null = null;
+
+    if (targetBrandOrAccountIdOrName) {
+      const cleanTarget = targetBrandOrAccountIdOrName.trim();
+
+      // Check if target is a numeric brand ID
+      if (/^\d+$/.test(cleanTarget)) {
+        resolvedBrandId = Number(cleanTarget);
+      } else {
+        // Query clients table by name
+        const { data: matchedClient } = await supabase
+          .from("clients")
+          .select("id, name")
+          .ilike("name", cleanTarget)
+          .maybeSingle();
+
+        if (matchedClient) {
+          resolvedBrandId = matchedClient.id;
+        }
+      }
+
+      // Query social_integrations for this brand or handle
+      let brandQuery = supabase
+        .from("social_integrations")
+        .select("*")
+        .eq("platform", "instagram")
+        .eq("connected", true)
+        .neq("status", "disconnected");
+
+      if (resolvedBrandId !== null) {
+        brandQuery = brandQuery.or(
+          `brand_id.eq.${resolvedBrandId},username.ilike.${cleanTarget},account_name.ilike.${cleanTarget},instagram_id.eq.${cleanTarget},account_id.eq.${cleanTarget}`
+        );
+      } else {
+        brandQuery = brandQuery.or(
+          `username.ilike.${cleanTarget},account_name.ilike.${cleanTarget},instagram_id.eq.${cleanTarget},account_id.eq.${cleanTarget}`
+        );
+      }
+
+      const { data: matchedIntegration } = await brandQuery.limit(1).maybeSingle();
+
+      if (matchedIntegration && matchedIntegration.access_token) {
+        const decryptedToken = decryptToken(matchedIntegration.access_token);
+        return {
+          id: matchedIntegration.id,
+          brandId: matchedIntegration.brand_id,
+          accountId: matchedIntegration.instagram_id || matchedIntegration.account_id,
+          accessToken: decryptedToken,
+          accountName: matchedIntegration.username || matchedIntegration.account_name || "Instagram Business",
+          isDefault: Boolean(matchedIntegration.is_primary ?? matchedIntegration.is_default),
+        };
+      }
+
+      // A known brand without its own connected account must never fall back to another brand's account
+      if (resolvedBrandId !== null) {
+        return null;
+      }
+    }
+
+    // Prioritize primary default account
+    const { data: defaultIntegration } = await supabase
       .from("social_integrations")
       .select("*")
       .eq("platform", "instagram")
-      .eq("connected", true);
+      .eq("connected", true)
+      .neq("status", "disconnected")
+      .order("is_primary", { ascending: false })
+      .order("is_default", { ascending: false })
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
-    if (targetAccountIdOrName) {
-      query = query.or(`account_id.eq.${targetAccountIdOrName},account_name.eq.${targetAccountIdOrName}`);
-    } else {
-      // Prioritize default account
-      query = query.order("is_default", { ascending: false }).order("created_at", { ascending: true });
-    }
-
-    const { data } = await query.limit(1).maybeSingle();
-
-    if (data && data.access_token && data.account_id) {
+    if (defaultIntegration && defaultIntegration.access_token) {
+      const decryptedToken = decryptToken(defaultIntegration.access_token);
       return {
-        id: data.id,
-        accountId: data.account_id,
-        accessToken: data.access_token,
-        accountName: data.account_name || "Instagram Business",
-        isDefault: data.is_default || false,
+        id: defaultIntegration.id,
+        brandId: defaultIntegration.brand_id,
+        accountId: defaultIntegration.instagram_id || defaultIntegration.account_id,
+        accessToken: decryptedToken,
+        accountName: defaultIntegration.username || defaultIntegration.account_name || "Instagram Business",
+        isDefault: Boolean(defaultIntegration.is_primary ?? defaultIntegration.is_default),
       };
     }
   } catch (err) {
@@ -51,13 +112,14 @@ export const getActiveInstagramCredentials = async (targetAccountIdOrName?: stri
 
   // Fallback to process.env
   const accountId = process.env.INSTAGRAM_ACCOUNT_ID;
-  const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+  const rawEnvToken = process.env.INSTAGRAM_ACCESS_TOKEN;
   const accountName = process.env.INSTAGRAM_ACCOUNT_NAME || "worknaiintern1";
 
-  if (!accountId || !accessToken) {
+  if (!accountId || !rawEnvToken) {
     return null;
   }
 
+  const accessToken = decryptToken(rawEnvToken);
   return { accountId, accessToken, accountName, isDefault: true };
 };
 
@@ -133,15 +195,16 @@ export const checkInstagramConnection = async (targetAccountIdOrName?: string) =
 export const publishToInstagram = async (
   post: InstagramMediaPost
 ): Promise<InstagramPublishResult> => {
-  const creds = await getActiveInstagramCredentials();
+  const creds = await getActiveInstagramCredentials(post.brand || undefined);
   if (!creds) {
     return {
       success: false,
-      error: "Instagram credentials not configured.",
+      error: `Instagram credentials not configured${post.brand ? ` for brand "${post.brand}"` : ""}.`,
     };
   }
 
-  const { accountId, accessToken } = creds;
+  const { accountId, accessToken, accountName } = creds;
+  console.log(`📸 [Instagram Service] Publishing for brand "${post.brand || 'Primary Default'}" using account @${accountName} (${accountId})`);
 
   // Build caption: title + content
   const captionParts = [post.title];
